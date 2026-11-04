@@ -330,7 +330,8 @@ public class SigBypass {
                         protected void afterHookedMethod(MethodHookParam param) {
                             boolean fw = calledByFramework();
                             Object orig = param.getResult();
-                            XLog.d(TAG, "path hook fired fw=" + fw + " orig=" + orig);
+                            String caller = callerClass();
+                            XLog.d(TAG, "path hook fired fw=" + fw + " caller=" + caller + " orig=" + orig);
                             if (!fw) param.setResult(realApk);
                         }
                     });
@@ -662,6 +663,21 @@ public class SigBypass {
                     || cn.startsWith("org.lsposed.lspatch.metaloader.");
         }
         return false;
+    }
+
+    private static String callerClass() {
+        for (StackTraceElement e : new Throwable().getStackTrace()) {
+            String cn = e.getClassName();
+            if (cn.equals("org.lsposed.lspatch.loader.SigBypass")
+                    || cn.startsWith("org.matrix.vector.")
+                    || cn.startsWith("de.robv.android.xposed.")
+                    || cn.startsWith("java.lang.reflect.")
+                    || cn.startsWith("android.app.ContextImpl")) {
+                continue;
+            }
+            return cn;
+        }
+        return "?";
     }
 
     private static String rewritePath(String s, String from, String to) {
