@@ -651,7 +651,7 @@ public class SigBypass {
         // 扫全栈会把 App 自己的调用也误判成框架调用。
         for (StackTraceElement e : new Throwable().getStackTrace()) {
             String cn = e.getClassName();
-            if (cn.equals("org.lsposed.lspatch.loader.SigBypass")
+            if (cn.startsWith("org.lsposed.lspatch.loader.SigBypass")
                     || cn.startsWith("org.matrix.vector.")
                     || cn.startsWith("de.robv.android.xposed.")
                     || cn.startsWith("java.lang.reflect.")
@@ -668,7 +668,7 @@ public class SigBypass {
     private static String callerClass() {
         for (StackTraceElement e : new Throwable().getStackTrace()) {
             String cn = e.getClassName();
-            if (cn.equals("org.lsposed.lspatch.loader.SigBypass")
+            if (cn.startsWith("org.lsposed.lspatch.loader.SigBypass")
                     || cn.startsWith("org.matrix.vector.")
                     || cn.startsWith("de.robv.android.xposed.")
                     || cn.startsWith("java.lang.reflect.")
