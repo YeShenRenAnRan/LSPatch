@@ -471,11 +471,13 @@ public class SigBypass {
     }
 
     private static boolean calledByFramework() {
+        // 只看 LSPatch loader 自己的帧；Vector 的 hook 链帧不算（否则永远为 true）
         for (StackTraceElement e : new Throwable().getStackTrace()) {
             String cn = e.getClassName();
-            if (cn.startsWith("org.lsposed.") || cn.startsWith("org.matrix.")) return true;
-            if (cn.startsWith("java.lang.reflect.") || cn.startsWith("android.app.ContextImpl")) continue;
-            break;
+            if (cn.startsWith("org.lsposed.lspatch.loader.")
+                    || cn.startsWith("org.lsposed.lspatch.metaloader.")) {
+                return true;
+            }
         }
         return false;
     }
