@@ -314,6 +314,7 @@ public class SigBypass {
         } catch (Throwable ignored) {
         }
         final String cacheApk = cache;
+        CACHE_FOR_CKSUM = cache;
         XLog.d(TAG, "universal hooks: real=" + realApk + " cache=" + cacheApk);
         if (cacheApk == null) return;
 
@@ -380,6 +381,32 @@ public class SigBypass {
             }
         } catch (Throwable t) {
             XLog.w(TAG, "appinfo creator hook failed: " + t);
+        }
+
+        // 1.6) getApplicationInfo: sourceDir 修回真实路径
+        try {
+            for (var m : Class.forName("android.app.ApplicationPackageManager").getDeclaredMethods()) {
+                String n = m.getName();
+                if (!n.equals("getApplicationInfo") && !n.equals("getApplicationInfoAsUser")) continue;
+                m.setAccessible(true);
+                XposedBridge.hookMethod(m, new XC_MethodHook() {
+                    @Override
+                    protected void afterHookedMethod(MethodHookParam param) {
+                        Object r = param.getResult();
+                        if (!(r instanceof android.content.pm.ApplicationInfo)) return;
+                        android.content.pm.ApplicationInfo ai = (android.content.pm.ApplicationInfo) r;
+                        if (!context.getPackageName().equals(ai.packageName)) return;
+                        ai.sourceDir = realApk;
+                        ai.publicSourceDir = realApk;
+                        if (ai.appComponentFactory != null
+                                && ai.appComponentFactory.contains("lspatch")) {
+                            ai.appComponentFactory = "android.app.AppComponentFactory";
+                        }
+                    }
+                });
+            }
+        } catch (Throwable t) {
+            XLog.w(TAG, "appinfo hook failed: " + t);
         }
 
         // 2) opening our own apk -> cached original
@@ -564,6 +591,26 @@ public class SigBypass {
         }
     }
 
+    private static int DEX_CKSUM;
+    private static String CACHE_FOR_CKSUM;
+
+    private static synchronized int dexChecksum() {
+        if (DEX_CKSUM != 0) return DEX_CKSUM;
+        if (CACHE_FOR_CKSUM == null) return 0;
+        try (java.util.zip.ZipFile z = new java.util.zip.ZipFile(CACHE_FOR_CKSUM)) {
+            java.util.zip.ZipEntry e = z.getEntry("classes.dex");
+            if (e == null) return 0;
+            try (var in = z.getInputStream(e)) {
+                byte[] h = new byte[12];
+                if (in.read(h, 0, 12) < 12) return 0;
+                DEX_CKSUM = (h[8] & 0xff) | ((h[9] & 0xff) << 8) | ((h[10] & 0xff) << 16) | ((h[11] & 0xff) << 24);
+                XLog.d(TAG, "dex checksum = " + Integer.toHexString(DEX_CKSUM));
+            }
+        } catch (Throwable ignored) {
+        }
+        return DEX_CKSUM;
+    }
+
     private static boolean spoofMem(long addr, byte[] dst, int off, int len, String realApk) {
         if (addr <= 0 || len <= 0) return false;
         refreshMaps();
@@ -583,6 +630,23 @@ public class SigBypass {
             long[] m = MAPS.get(hit);
             String path = MAPS_PATH.get(hit);
             long chunk = Math.min(remaining, m[1] - cur);
+            if (path.endsWith(".vdex") && cur == m[0]) {
+                int cks = dexChecksum();
+                if (cks != 0) {
+                    byte[] fake = new byte[(int) chunk];
+                    byte[] magic = {'d', 'e', 'x', '\n', '0', '3', '5', 0};
+                    System.arraycopy(magic, 0, fake, 0, 8);
+                    fake[8] = (byte) (cks & 0xff);
+                    fake[9] = (byte) ((cks >> 8) & 0xff);
+                    fake[10] = (byte) ((cks >> 16) & 0xff);
+                    fake[11] = (byte) ((cks >> 24) & 0xff);
+                    System.arraycopy(fake, 0, dst, dstOff, (int) chunk);
+                    cur += chunk;
+                    dstOff += (int) chunk;
+                    remaining -= chunk;
+                    continue;
+                }
+            }
             long fo = m[2] + (cur - m[0]);
             String readPath = path.contains("lspatch/origin") ? realApk : path;
             try (var raf = new java.io.RandomAccessFile(readPath, "r")) {
@@ -608,7 +672,7 @@ public class SigBypass {
             // Prime the cache so hasSigningCertificate has the original on hand from the first call.
             getReplacement(context, context.getPackageName());
             hookPackageParser(context);
-            proxyPackageInfoCreator(context);
+            // proxyPackageInfoCreator(context);  // 由 PackageInfo$1.createFromParcel hook 取代
             hookApplicationPackageManager(context);
             hookPackageArchiveInfo(context);
             hookSigningCertificateCheck(context);
