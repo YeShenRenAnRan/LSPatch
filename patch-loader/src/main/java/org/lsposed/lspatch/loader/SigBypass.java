@@ -338,6 +338,50 @@ public class SigBypass {
             XLog.w(TAG, "path hook failed: " + t);
         }
 
+        // 1.5) binder 反序列化：PackageInfo$1 / ApplicationInfo$1
+        try {
+            Class<?> piCreator = Class.forName("android.content.pm.PackageInfo$1");
+            for (var m : piCreator.getDeclaredMethods()) {
+                if (!m.getName().equals("createFromParcel")) continue;
+                m.setAccessible(true);
+                XposedBridge.hookMethod(m, new XC_MethodHook() {
+                    @Override
+                    protected void afterHookedMethod(MethodHookParam param) {
+                        Object r = param.getResult();
+                        if (!(r instanceof PackageInfo)) return;
+                        PackageInfo pi = (PackageInfo) r;
+                        String repl = getReplacement(context, pi.packageName);
+                        if (repl != null) replaceSignature(context, pi);
+                    }
+                });
+            }
+        } catch (Throwable t) {
+            XLog.w(TAG, "packageinfo creator hook failed: " + t);
+        }
+
+        try {
+            Class<?> aiCreator = Class.forName("android.content.pm.ApplicationInfo$1");
+            for (var m : aiCreator.getDeclaredMethods()) {
+                if (!m.getName().equals("createFromParcel")) continue;
+                m.setAccessible(true);
+                XposedBridge.hookMethod(m, new XC_MethodHook() {
+                    @Override
+                    protected void afterHookedMethod(MethodHookParam param) {
+                        Object r = param.getResult();
+                        if (!(r instanceof android.content.pm.ApplicationInfo)) return;
+                        android.content.pm.ApplicationInfo ai = (android.content.pm.ApplicationInfo) r;
+                        if (!context.getPackageName().equals(ai.packageName)) return;
+                        // 平台默认值：检测项就是拿它做比较
+                        ai.appComponentFactory = "android.app.AppComponentFactory";
+                        ai.sourceDir = realApk;
+                        ai.publicSourceDir = realApk;
+                    }
+                });
+            }
+        } catch (Throwable t) {
+            XLog.w(TAG, "appinfo creator hook failed: " + t);
+        }
+
         // 2) opening our own apk -> cached original
         for (String cls : new String[]{"java.util.jar.JarFile", "java.util.zip.ZipFile"}) {
             try {
@@ -471,10 +515,11 @@ public class SigBypass {
     }
 
     private static boolean calledByFramework() {
-        // 只看 LSPatch loader 自己的帧；Vector 的 hook 链帧不算（否则永远为 true）
+        // 只认 loader 入口类；SigBypass 自己的帧也在栈里，不能匹配整个 loader 包
         for (StackTraceElement e : new Throwable().getStackTrace()) {
             String cn = e.getClassName();
-            if (cn.startsWith("org.lsposed.lspatch.loader.")
+            if (cn.equals("org.lsposed.lspatch.loader.LSPApplication")
+                    || cn.equals("org.lsposed.lspatch.loader.LSPatchDocumentsProvider")
                     || cn.startsWith("org.lsposed.lspatch.metaloader.")) {
                 return true;
             }
