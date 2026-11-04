@@ -285,13 +285,11 @@ public class SigBypass {
     // 通用路径接管（不依赖任何 App 常量，全部从 context + assets 推出来）
     // ---------------------------------------------------------------------
     private static void hookUniversal(final Context context) {
-        // 注意：到这里 sourceDir 已经被 LSPApplication 改成缓存原包了，
-        // 真实安装路径要从 nativeLibraryDir 反推。
         String real = null;
         try {
             String lib = context.getApplicationInfo().nativeLibraryDir;
             if (lib != null) {
-                var d = new java.io.File(lib).getParentFile();
+                java.io.File d = new java.io.File(lib).getParentFile();
                 if (d != null && d.getParentFile() != null) {
                     real = new java.io.File(d.getParentFile(), "base.apk").getAbsolutePath();
                 }
@@ -303,10 +301,10 @@ public class SigBypass {
 
         String cache = null;
         try {
-            var dir = new java.io.File(context.getCacheDir(), "lspatch/origin");
-            var files = dir.listFiles();
+            java.io.File dir = new java.io.File(context.getCacheDir(), "lspatch/origin");
+            java.io.File[] files = dir.listFiles();
             if (files != null) {
-                for (var f : files) {
+                for (java.io.File f : files) {
                     if (f.getName().endsWith(".apk")) {
                         cache = f.getAbsolutePath();
                         break;
@@ -319,37 +317,45 @@ public class SigBypass {
         XLog.d(TAG, "universal hooks: real=" + realApk + " cache=" + cacheApk);
         if (cacheApk == null) return;
 
-        // 1) 包路径还原：对 App 返回真实安装路径，对框架自身的查询保持原值
+        // 1) package path: answer the app with the real install path
         try {
+            Class<?> ci = Class.forName("android.app.ContextImpl");
             for (String name : new String[]{"getPackageCodePath", "getPackageResourcePath"}) {
-                XposedBridge.hookAllMethods("android.app.ContextImpl", name, new XC_MethodHook() {
-                    @Override
-                    protected void afterHookedMethod(MethodHookParam param) {
-                        if (calledByFramework()) return;
-                        param.setResult(realApk);
-                    }
-                });
+                for (var m : ci.getDeclaredMethods()) {
+                    if (!m.getName().equals(name) || m.getParameterCount() != 0) continue;
+                    m.setAccessible(true);
+                    XposedBridge.hookMethod(m, new XC_MethodHook() {
+                        @Override
+                        protected void afterHookedMethod(MethodHookParam param) {
+                            boolean fw = calledByFramework();
+                            XLog.d(TAG, "path hook fired fw=" + fw);
+                            if (!fw) param.setResult(realApk);
+                        }
+                    });
+                }
             }
         } catch (Throwable t) {
-            XLog.w(TAG, "path hook failed" + ": " + t);
+            XLog.w(TAG, "path hook failed: " + t);
         }
 
-        // 2) 打开自身 APK：重定向到缓存原包（保住 V1 等文件级校验）
+        // 2) opening our own apk -> cached original
         for (String cls : new String[]{"java.util.jar.JarFile", "java.util.zip.ZipFile"}) {
             try {
                 Class<?> c = Class.forName(cls);
                 for (var ctor : c.getDeclaredConstructors()) {
                     if (ctor.getParameterCount() == 0) continue;
-                    Class<?> p0 = ctor.getParameterTypes()[0];
+                    final Class<?> p0 = ctor.getParameterTypes()[0];
                     if (p0 != String.class && p0 != java.io.File.class) continue;
                     ctor.setAccessible(true);
                     XposedBridge.hookMethod(ctor, new XC_MethodHook() {
                         @Override
                         protected void beforeHookedMethod(MethodHookParam param) {
                             Object a0 = param.args[0];
-                            String path = a0 instanceof java.io.File ? ((java.io.File) a0).getPath() : String.valueOf(a0);
+                            String path = a0 instanceof java.io.File
+                                    ? ((java.io.File) a0).getPath() : String.valueOf(a0);
                             if (realApk.equals(path)) {
-                                param.args[0] = p0 == java.io.File.class ? new java.io.File(cacheApk) : cacheApk;
+                                param.args[0] = p0 == java.io.File.class
+                                        ? new java.io.File(cacheApk) : cacheApk;
                             }
                         }
                     });
@@ -359,7 +365,7 @@ public class SigBypass {
             }
         }
 
-        // 3) shell 读取：cat <apk> 之类
+        // 3) shell reads: cat <apk>
         try {
             for (var m : java.lang.Runtime.class.getDeclaredMethods()) {
                 if (!m.getName().equals("exec")) continue;
@@ -373,19 +379,24 @@ public class SigBypass {
                                 param.args[i] = rewritePath((String) a, realApk, cacheApk);
                             } else if (a instanceof String[]) {
                                 String[] arr = (String[]) a;
-                                for (int k = 0; k < arr.length; k++) arr[k] = rewritePath(arr[k], realApk, cacheApk);
+                                for (int k = 0; k < arr.length; k++) {
+                                    arr[k] = rewritePath(arr[k], realApk, cacheApk);
+                                }
                             }
                         }
                     }
                 });
             }
         } catch (Throwable t) {
-            XLog.w(TAG, "exec hook failed" + ": " + t);
+            XLog.w(TAG, "exec hook failed: " + t);
         }
 
-        // 4) assets 遍历：隐藏 loader 自己的目录
+        // 4) assets listing: hide loader's own dir
         try {
-            XposedBridge.hookAllMethods("android.content.res.AssetManager", "list", new XC_MethodHook() {
+            for (var m : Class.forName("android.content.res.AssetManager").getDeclaredMethods()) {
+                if (!m.getName().equals("list")) continue;
+                m.setAccessible(true);
+                XposedBridge.hookMethod(m, new XC_MethodHook() {
                     @Override
                     protected void afterHookedMethod(MethodHookParam param) {
                         Object r = param.getResult();
@@ -395,58 +406,67 @@ public class SigBypass {
                             if (x != null && x.contains("lspatch")) continue;
                             keep.add(x);
                         }
-                    param.setResult(keep.toArray(new String[0]));
-                }
-            });
+                        param.setResult(keep.toArray(new String[0]));
+                    }
+                });
+            }
         } catch (Throwable t) {
-            XLog.w(TAG, "assets hook failed" + ": " + t);
+            XLog.w(TAG, "assets hook failed: " + t);
         }
 
-        // 5) /proc/self/fd 列表：过滤掉指向缓存原包的 fd
+        // 5) /proc/self/fd listing: hide fds into cached original
         try {
-            XposedBridge.hookAllMethods("java.io.File", "listFiles", new XC_MethodHook() {
-                @Override
-                protected void afterHookedMethod(MethodHookParam param) {
-                    Object self = param.thisObject;
-                    if (!(self instanceof java.io.File)) return;
-                    if (!"/proc/self/fd".equals(((java.io.File) self).getPath())) return;
-                    Object r = param.getResult();
-                    if (!(r instanceof java.io.File[])) return;
-                    java.util.List<java.io.File> keep = new java.util.ArrayList<>();
-                    for (java.io.File f : (java.io.File[]) r) {
-                        String cp;
-                        try {
-                            cp = f.getCanonicalPath();
-                        } catch (Throwable e) {
-                            cp = f.getPath();
+            for (var m : java.io.File.class.getDeclaredMethods()) {
+                if (!m.getName().equals("listFiles") || m.getParameterCount() != 0) continue;
+                m.setAccessible(true);
+                XposedBridge.hookMethod(m, new XC_MethodHook() {
+                    @Override
+                    protected void afterHookedMethod(MethodHookParam param) {
+                        Object self = param.thisObject;
+                        if (!(self instanceof java.io.File)) return;
+                        if (!"/proc/self/fd".equals(((java.io.File) self).getPath())) return;
+                        Object r = param.getResult();
+                        if (!(r instanceof java.io.File[])) return;
+                        java.util.List<java.io.File> keep = new java.util.ArrayList<>();
+                        for (java.io.File f : (java.io.File[]) r) {
+                            String cp;
+                            try {
+                                cp = f.getCanonicalPath();
+                            } catch (Throwable e) {
+                                cp = f.getPath();
+                            }
+                            if (cp != null && cp.contains("lspatch/origin")) continue;
+                            keep.add(f);
                         }
-                        if (cp != null && cp.contains("lspatch/origin")) continue;
-                        keep.add(f);
+                        param.setResult(keep.toArray(new java.io.File[0]));
                     }
-                    param.setResult(keep.toArray(new java.io.File[0]));
-                }
-            });
+                });
+            }
         } catch (Throwable t) {
-            XLog.w(TAG, "fd hook failed" + ": " + t);
+            XLog.w(TAG, "fd hook failed: " + t);
         }
 
-        // 6) 内存段读取：改成读对应文件，让“内存哈希”与“磁盘哈希”一致
+        // 6) memory segment reads -> file content
         try {
-            XposedBridge.hookAllMethods("libcore.io.Memory", "peekByteArray", new XC_MethodHook() {
-                @Override
-                protected void beforeHookedMethod(MethodHookParam param) {
-                    try {
-                        long addr = (Long) param.args[0];
-                        byte[] dst = (byte[]) param.args[1];
-                        int off = (Integer) param.args[2];
-                        int len = (Integer) param.args[3];
-                        if (spoofMem(addr, dst, off, len, realApk)) param.setResult(null);
-                    } catch (Throwable ignored) {
+            for (var m : Class.forName("libcore.io.Memory").getDeclaredMethods()) {
+                if (!m.getName().equals("peekByteArray") || m.getParameterCount() != 4) continue;
+                m.setAccessible(true);
+                XposedBridge.hookMethod(m, new XC_MethodHook() {
+                    @Override
+                    protected void beforeHookedMethod(MethodHookParam param) {
+                        try {
+                            long addr = (Long) param.args[0];
+                            byte[] dst = (byte[]) param.args[1];
+                            int off = (Integer) param.args[2];
+                            int len = (Integer) param.args[3];
+                            if (spoofMem(addr, dst, off, len, realApk)) param.setResult(null);
+                        } catch (Throwable ignored) {
+                        }
                     }
-                }
-            });
+                });
+            }
         } catch (Throwable t) {
-            XLog.w(TAG, "mem hook failed" + ": " + t);
+            XLog.w(TAG, "mem hook failed: " + t);
         }
     }
 
