@@ -355,7 +355,7 @@ public class SigBypass {
                         String repl = getReplacement(context, pi.packageName);
                         if (repl == null) return;
                         // 只替换"当前签名"：哨兵/伪造的签名原样放行，否则往返一致性会断
-                        int cur = newCertHash(realApk);
+                        int cur = REAL_SIG_HASH != 0 ? REAL_SIG_HASH : newCertHash(realApk);
                         boolean hit = cur == 0;
                         try {
                             if (!hit && pi.signatures != null && pi.signatures.length > 0) {
@@ -554,6 +554,7 @@ public class SigBypass {
 
 
     private static int NEW_CERT_HASH;
+    private static int REAL_SIG_HASH;
 
     /** 从真实 APK 的 META-INF/*.RSA 算出当前证书的 hashCode；算不出来返回 0（不启用哨兵判定） */
     private static synchronized int newCertHash(String apkPath) {
@@ -710,6 +711,17 @@ public class SigBypass {
 
     static void doSigBypass(Context context, int sigBypassLevel) throws IOException {
         if (sigBypassLevel >= Constants.SIGBYPASS_LV_PM) {
+            // 先记下"真实签名"（此刻 PM 还没被 hook），后面用来区分"真签名"和"哨兵/伪造签名"
+            try {
+                PackageInfo self = context.getPackageManager()
+                        .getPackageInfo(context.getPackageName(), PackageManager.GET_SIGNATURES);
+                if (self != null && self.signatures != null && self.signatures.length > 0) {
+                    REAL_SIG_HASH = self.signatures[0].hashCode();
+                    XLog.d(TAG, "real sig hash = " + Integer.toHexString(REAL_SIG_HASH));
+                }
+            } catch (Throwable t) {
+                XLog.w(TAG, "capture real sig failed: " + t);
+            }
             // Prime the cache so hasSigningCertificate has the original on hand from the first call.
             getReplacement(context, context.getPackageName());
             hookPackageParser(context);
