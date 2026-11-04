@@ -329,7 +329,8 @@ public class SigBypass {
                         @Override
                         protected void afterHookedMethod(MethodHookParam param) {
                             boolean fw = calledByFramework();
-                            XLog.d(TAG, "path hook fired fw=" + fw);
+                            Object orig = param.getResult();
+                            XLog.d(TAG, "path hook fired fw=" + fw + " orig=" + orig);
                             if (!fw) param.setResult(realApk);
                         }
                     });
@@ -352,7 +353,17 @@ public class SigBypass {
                         if (!(r instanceof PackageInfo)) return;
                         PackageInfo pi = (PackageInfo) r;
                         String repl = getReplacement(context, pi.packageName);
-                        if (repl != null) replaceSignature(context, pi);
+                        if (repl == null) return;
+                        // 只替换"当前签名"：哨兵/伪造的签名原样放行，否则往返一致性会断
+                        int cur = newCertHash(realApk);
+                        boolean hit = cur == 0;
+                        try {
+                            if (!hit && pi.signatures != null && pi.signatures.length > 0) {
+                                hit = pi.signatures[0].hashCode() == cur;
+                            }
+                        } catch (Throwable ignored) {
+                        }
+                        if (hit) replaceSignature(context, pi);
                     }
                 });
             }
@@ -539,6 +550,36 @@ public class SigBypass {
         } catch (Throwable t) {
             XLog.w(TAG, "mem hook failed: " + t);
         }
+    }
+
+
+    private static int NEW_CERT_HASH;
+
+    /** 从真实 APK 的 META-INF/*.RSA 算出当前证书的 hashCode；算不出来返回 0（不启用哨兵判定） */
+    private static synchronized int newCertHash(String apkPath) {
+        if (NEW_CERT_HASH != 0) return NEW_CERT_HASH;
+        if (apkPath == null) return 0;
+        try (java.util.zip.ZipFile z = new java.util.zip.ZipFile(apkPath)) {
+            var en = z.entries();
+            while (en.hasMoreElements()) {
+                var e = en.nextElement();
+                String n = e.getName().toUpperCase(java.util.Locale.ROOT);
+                if (!n.startsWith("META-INF/") || !n.endsWith(".RSA")) continue;
+                try (var in = z.getInputStream(e)) {
+                    var cf = java.security.cert.CertificateFactory.getInstance("X.509");
+                    var certs = cf.generateCertificates(in);
+                    if (certs.isEmpty()) return 0;
+                    byte[] der = certs.iterator().next().getEncoded();
+                    int h = 1;
+                    for (byte b : der) h = 31 * h + b;
+                    NEW_CERT_HASH = h;
+                    XLog.d(TAG, "current cert hash = " + Integer.toHexString(h));
+                }
+                break;
+            }
+        } catch (Throwable ignored) {
+        }
+        return NEW_CERT_HASH;
     }
 
     private static boolean calledByFramework() {
