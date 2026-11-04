@@ -307,7 +307,7 @@ public class SigBypass {
                 });
             }
         } catch (Throwable t) {
-            XLog.w(TAG, "path hook failed", t);
+            XLog.w(TAG, "path hook failed" + ": " + t);
         }
 
         // 2) 打开自身 APK：重定向到缓存原包（保住 V1 等文件级校验）
@@ -356,7 +356,7 @@ public class SigBypass {
                 });
             }
         } catch (Throwable t) {
-            XLog.w(TAG, "exec hook failed", t);
+            XLog.w(TAG, "exec hook failed" + ": " + t);
         }
 
         // 4) assets 遍历：隐藏 loader 自己的目录
@@ -379,7 +379,7 @@ public class SigBypass {
                 });
             }
         } catch (Throwable t) {
-            XLog.w(TAG, "assets hook failed", t);
+            XLog.w(TAG, "assets hook failed" + ": " + t);
         }
 
         // 5) /proc/self/fd 列表：过滤掉指向缓存原包的 fd
@@ -407,7 +407,7 @@ public class SigBypass {
                 }
             });
         } catch (Throwable t) {
-            XLog.w(TAG, "fd hook failed", t);
+            XLog.w(TAG, "fd hook failed" + ": " + t);
         }
 
         // 6) 内存段读取：改成读对应文件，让“内存哈希”与“磁盘哈希”一致
@@ -426,7 +426,7 @@ public class SigBypass {
                 }
             });
         } catch (Throwable t) {
-            XLog.w(TAG, "mem hook failed", t);
+            XLog.w(TAG, "mem hook failed" + ": " + t);
         }
     }
 
