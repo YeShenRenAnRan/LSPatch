@@ -285,14 +285,38 @@ public class SigBypass {
     // 通用路径接管（不依赖任何 App 常量，全部从 context + assets 推出来）
     // ---------------------------------------------------------------------
     private static void hookUniversal(final Context context) {
-        final String realApk = context.getPackageCodePath();
+        // 注意：到这里 sourceDir 已经被 LSPApplication 改成缓存原包了，
+        // 真实安装路径要从 nativeLibraryDir 反推。
+        String real = null;
+        try {
+            String lib = context.getApplicationInfo().nativeLibraryDir;
+            if (lib != null) {
+                var d = new java.io.File(lib).getParentFile();
+                if (d != null && d.getParentFile() != null) {
+                    real = new java.io.File(d.getParentFile(), "base.apk").getAbsolutePath();
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+        if (real == null) real = context.getPackageCodePath();
+        final String realApk = real;
+
         String cache = null;
-        try (ZipFile zf = new ZipFile(realApk)) {
-            var e = zf.getEntry(ORIGINAL_APK_ASSET_PATH);
-            if (e != null) cache = context.getCacheDir() + "/lspatch/origin/" + e.getCrc() + ".apk";
+        try {
+            var dir = new java.io.File(context.getCacheDir(), "lspatch/origin");
+            var files = dir.listFiles();
+            if (files != null) {
+                for (var f : files) {
+                    if (f.getName().endsWith(".apk")) {
+                        cache = f.getAbsolutePath();
+                        break;
+                    }
+                }
+            }
         } catch (Throwable ignored) {
         }
         final String cacheApk = cache;
+        XLog.d(TAG, "universal hooks: real=" + realApk + " cache=" + cacheApk);
         if (cacheApk == null) return;
 
         // 1) 包路径还原：对 App 返回真实安装路径，对框架自身的查询保持原值
