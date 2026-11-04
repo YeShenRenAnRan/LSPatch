@@ -322,7 +322,7 @@ public class SigBypass {
         // 1) 包路径还原：对 App 返回真实安装路径，对框架自身的查询保持原值
         try {
             for (String name : new String[]{"getPackageCodePath", "getPackageResourcePath"}) {
-                XposedBridge.hookAllMethods(Class.forName("android.app.ContextImpl"), name, new XC_MethodHook() {
+                XposedBridge.hookAllMethods("android.app.ContextImpl", name, new XC_MethodHook() {
                     @Override
                     protected void afterHookedMethod(MethodHookParam param) {
                         if (calledByFramework()) return;
@@ -385,10 +385,7 @@ public class SigBypass {
 
         // 4) assets 遍历：隐藏 loader 自己的目录
         try {
-            for (var m : android.content.res.AssetManager.class.getDeclaredMethods()) {
-                if (!m.getName().equals("list")) continue;
-                m.setAccessible(true);
-                XposedBridge.hookMethod(m, new XC_MethodHook() {
+            XposedBridge.hookAllMethods("android.content.res.AssetManager", "list", new XC_MethodHook() {
                     @Override
                     protected void afterHookedMethod(MethodHookParam param) {
                         Object r = param.getResult();
@@ -398,17 +395,16 @@ public class SigBypass {
                             if (x != null && x.contains("lspatch")) continue;
                             keep.add(x);
                         }
-                        param.setResult(keep.toArray(new String[0]));
-                    }
-                });
-            }
+                    param.setResult(keep.toArray(new String[0]));
+                }
+            });
         } catch (Throwable t) {
             XLog.w(TAG, "assets hook failed" + ": " + t);
         }
 
         // 5) /proc/self/fd 列表：过滤掉指向缓存原包的 fd
         try {
-            XposedBridge.hookAllMethods(java.io.File.class, "listFiles", new XC_MethodHook() {
+            XposedBridge.hookAllMethods("java.io.File", "listFiles", new XC_MethodHook() {
                 @Override
                 protected void afterHookedMethod(MethodHookParam param) {
                     Object self = param.thisObject;
@@ -436,7 +432,7 @@ public class SigBypass {
 
         // 6) 内存段读取：改成读对应文件，让“内存哈希”与“磁盘哈希”一致
         try {
-            XposedBridge.hookAllMethods(Class.forName("libcore.io.Memory"), "peekByteArray", new XC_MethodHook() {
+            XposedBridge.hookAllMethods("libcore.io.Memory", "peekByteArray", new XC_MethodHook() {
                 @Override
                 protected void beforeHookedMethod(MethodHookParam param) {
                     try {
