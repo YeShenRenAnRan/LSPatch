@@ -328,11 +328,21 @@ public class SigBypass {
                     XposedBridge.hookMethod(m, new XC_MethodHook() {
                         @Override
                         protected void afterHookedMethod(MethodHookParam param) {
-                            boolean fw = calledByFramework();
                             Object orig = param.getResult();
-                            String caller = callerClass();
-                            XLog.d(TAG, "path hook fired fw=" + fw + " caller=" + caller + " orig=" + orig);
-                            if (!fw) param.setResult(realApk);
+                            if (orig instanceof String && !realApk.equals(orig)) {
+                                // 诊断：把前 8 层栈打出来，弄清是谁在问路径
+                                if (!DUMPED) {
+                                    DUMPED = true;
+                                    StringBuilder sb = new StringBuilder();
+                                    int n = 0;
+                                    for (StackTraceElement e : new Throwable().getStackTrace()) {
+                                        if (n++ >= 8) break;
+                                        sb.append("\n    at ").append(e.getClassName()).append('.').append(e.getMethodName());
+                                    }
+                                    XLog.d(TAG, "path hook stack:" + sb);
+                                }
+                                param.setResult(realApk);
+                            }
                         }
                     });
                 }
@@ -618,6 +628,7 @@ public class SigBypass {
 
     private static int NEW_CERT_HASH;
     private static int REAL_SIG_HASH;
+    private static boolean DUMPED;
 
     /** 从真实 APK 的 META-INF/*.RSA 算出当前证书的 hashCode；算不出来返回 0（不启用哨兵判定） */
     private static synchronized int newCertHash(String apkPath) {
