@@ -420,6 +420,25 @@ public class SigBypass {
             XLog.w(TAG, "appinfo hook failed: " + t);
         }
 
+        // 1.7) LoadedApk.getResDir: Context 路径的另一个来源
+        try {
+            for (var m : Class.forName("android.app.LoadedApk").getDeclaredMethods()) {
+                if (!m.getName().equals("getResDir") || m.getParameterCount() != 0) continue;
+                m.setAccessible(true);
+                XposedBridge.hookMethod(m, new XC_MethodHook() {
+                    @Override
+                    protected void afterHookedMethod(MethodHookParam param) {
+                        Object r = param.getResult();
+                        if (r instanceof String && ((String) r).contains("lspatch/origin")) {
+                            param.setResult(realApk);
+                        }
+                    }
+                });
+            }
+        } catch (Throwable t) {
+            XLog.w(TAG, "loadedapk hook failed: " + t);
+        }
+
         // 2) opening our own apk -> cached original
         for (String cls : new String[]{"java.util.jar.JarFile", "java.util.zip.ZipFile"}) {
             try {
@@ -445,6 +464,49 @@ public class SigBypass {
             } catch (Throwable t) {
                 XLog.w(TAG, "zip hook failed: " + cls + ": " + t);
             }
+        }
+
+        // 2.5) maps 文本：把本 App 的 apk 映射行 perms 改成 r--s（LoadAPKRes 要求）
+        try {
+            for (var ctor : java.io.FileInputStream.class.getDeclaredConstructors()) {
+                if (ctor.getParameterCount() != 1 || ctor.getParameterTypes()[0] != String.class) continue;
+                ctor.setAccessible(true);
+                XposedBridge.hookMethod(ctor, new XC_MethodHook() {
+                    @Override
+                    protected void beforeHookedMethod(MethodHookParam param) {
+                        if (!"/proc/self/maps".equals(param.args[0])) return;
+                        try {
+                            StringBuilder sb = new StringBuilder();
+                            boolean changed = false;
+                            try (var br = new java.io.BufferedReader(new java.io.FileReader("/proc/self/maps"))) {
+                                String line;
+                                while ((line = br.readLine()) != null) {
+                                    if (line.contains(realApk)) {
+                                        String[] f = line.split("\\s+");
+                                        if (f.length >= 6 && !"r--s".equals(f[1])) {
+                                            line = f[0] + " r--s " + f[2] + " " + f[3] + " " + f[4] + " " + f[5];
+                                            changed = true;
+                                        }
+                                    }
+                                    sb.append(line).append('\n');
+                                }
+                            }
+                            if (changed) {
+                                java.io.File fake = new java.io.File(context.getCacheDir(), "maps_fake.txt");
+                                try (var w = new java.io.FileWriter(fake)) {
+                                    w.write(sb.toString());
+                                }
+                                param.args[0] = fake.getAbsolutePath();
+                                XLog.d(TAG, "maps rewritten -> " + fake.getAbsolutePath());
+                            }
+                        } catch (Throwable t) {
+                            XLog.w(TAG, "maps rewrite failed: " + t);
+                        }
+                    }
+                });
+            }
+        } catch (Throwable t) {
+            XLog.w(TAG, "maps hook failed: " + t);
         }
 
         // 3) shell reads: cat <apk>
@@ -734,9 +796,16 @@ public class SigBypass {
         if (sigBypassLevel >= Constants.SIGBYPASS_LV_PM_OPENAT) {
             String cacheApkPath;
             try (ZipFile sourceFile = new ZipFile(context.getPackageResourcePath())) {
-                cacheApkPath = context.getCacheDir() + "/lspatch/origin/" + sourceFile.getEntry(ORIGINAL_APK_ASSET_PATH).getCrc() + ".apk";
+                var entry = sourceFile.getEntry(ORIGINAL_APK_ASSET_PATH);
+                if (entry != null) {
+                    cacheApkPath = context.getCacheDir() + "/lspatch/origin/" + entry.getCrc() + ".apk";
+                } else {
+                    cacheApkPath = null;
+                }
             }
-            org.matrix.vector.nativebridge.SigBypass.enableOpenatHook(context.getPackageResourcePath(), cacheApkPath);
+            if (cacheApkPath != null) {
+                org.matrix.vector.nativebridge.SigBypass.enableOpenatHook(context.getPackageResourcePath(), cacheApkPath);
+            }
         }
         if (sigBypassLevel >= Constants.SIGBYPASS_LV_PM_OPENAT_SVC) {
             // Reuses the apk paths enableOpenatHook just recorded; must run after it.
