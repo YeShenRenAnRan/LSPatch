@@ -646,14 +646,20 @@ public class SigBypass {
     }
 
     private static boolean calledByFramework() {
-        // 只认 loader 入口类；SigBypass 自己的帧也在栈里，不能匹配整个 loader 包
+        // 只看"最近的调用者"：App 启动期间 LSPApplication 一直在栈上，
+        // 扫全栈会把 App 自己的调用也误判成框架调用。
         for (StackTraceElement e : new Throwable().getStackTrace()) {
             String cn = e.getClassName();
-            if (cn.equals("org.lsposed.lspatch.loader.LSPApplication")
-                    || cn.equals("org.lsposed.lspatch.loader.LSPatchDocumentsProvider")
-                    || cn.startsWith("org.lsposed.lspatch.metaloader.")) {
-                return true;
+            if (cn.equals("org.lsposed.lspatch.loader.SigBypass")
+                    || cn.startsWith("org.matrix.vector.")
+                    || cn.startsWith("de.robv.android.xposed.")
+                    || cn.startsWith("java.lang.reflect.")
+                    || cn.startsWith("android.app.ContextImpl")) {
+                continue;
             }
+            return cn.equals("org.lsposed.lspatch.loader.LSPApplication")
+                    || cn.equals("org.lsposed.lspatch.loader.LSPatchDocumentsProvider")
+                    || cn.startsWith("org.lsposed.lspatch.metaloader.");
         }
         return false;
     }
