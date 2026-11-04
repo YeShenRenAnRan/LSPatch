@@ -315,8 +315,10 @@ public class LSPApplication {
                 cacheApkPath = originPath.resolve(sourceFile.getEntry(ORIGINAL_APK_ASSET_PATH).getCrc() + ".apk");
             }
 
-            appInfo.sourceDir = cacheApkPath.toString();
-            appInfo.publicSourceDir = cacheApkPath.toString();
+            // [mixsign] 保持真实安装路径：App 的类从真实 APK 的 classesN.dex 加载，
+            // 缓存里的原包只用于 openat 重定向（文件级签名读取）。
+            // 原来的两行会把 sourceDir/publicSourceDir 指到 cache/lspatch/origin/*.apk，
+            // 被 Package(Path) / ApkFDPath / LoadAPKRes 三项反篡改检测抓到。
 
             if (!Files.exists(cacheApkPath)) {
                 Log.i(TAG, "Extract original apk");
