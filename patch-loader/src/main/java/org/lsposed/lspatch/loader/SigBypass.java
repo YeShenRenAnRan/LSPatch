@@ -331,7 +331,7 @@ public class SigBypass {
                     });
                 }
             } catch (Throwable t) {
-                XLog.w(TAG, "zip hook failed: " + cls, t);
+                XLog.w(TAG, "zip hook failed: " + cls + ": " + t);
             }
         }
 
