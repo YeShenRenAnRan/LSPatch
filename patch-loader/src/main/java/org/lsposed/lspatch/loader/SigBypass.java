@@ -553,9 +553,15 @@ public class SigBypass {
                                 while ((line = br.readLine()) != null) {
                                     if (line.contains(realApk)) {
                                         String[] f = line.split("\\s+");
-                                        if (f.length >= 6 && !"r--s".equals(f[1])) {
-                                            line = f[0] + " r--s " + f[2] + " " + f[3] + " " + f[4] + " " + f[5];
-                                            changed = true;
+                                        if (f.length >= 6) {
+                                            // LoadAPKRes 取第一条匹配行，要求 perms=r--s 且头部是 "PK"（ZIP）。
+                                            // 进程里 apk 是从某个偏移开始映射的，这里把偏移写成 0，
+                                            // 配合 peekByteArray 的"读文件"实现，头部就会是 apk 的开头。
+                                            String rebuilt = f[0] + " r--s 00000000 " + f[3] + " " + f[4] + " " + f[5];
+                                            if (!rebuilt.equals(line)) {
+                                                line = rebuilt;
+                                                changed = true;
+                                            }
                                         }
                                     }
                                     sb.append(line).append('\n');
