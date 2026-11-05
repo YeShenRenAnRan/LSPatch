@@ -879,7 +879,10 @@ public class SigBypass {
                     continue;
                 }
             }
-            long fo = m[2] + (cur - m[0]);
+            // 本 App 的 apk 映射：我们已经在 maps 里把偏移改写成 0，
+            // 这里也按 0 偏移返回文件内容，保证"内存段"与"IO 读"看到的是同一段
+            boolean isSelfApk = path.equals(realApk);
+            long fo = isSelfApk ? (cur - m[0]) : (m[2] + (cur - m[0]));
             String readPath = path.contains("lspatch/origin") ? realApk : path;
             try (var raf = new java.io.RandomAccessFile(readPath, "r")) {
                 long avail = Math.max(0L, raf.length() - fo);
