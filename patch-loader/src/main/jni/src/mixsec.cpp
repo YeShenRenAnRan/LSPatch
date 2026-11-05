@@ -148,30 +148,36 @@ void buildCleanMaps(const std::string& out) {
     fclose(of);
 }
 
+void* sym(const char* name) {
+    void* p = dlsym(RTLD_DEFAULT, name);
+    if (p == nullptr) p = dlsym(RTLD_NEXT, name);
+    return p;
+}
+
 void installHooks() {
     void* p;
 
-    p = DobbySymbolResolver(nullptr, "pthread_create");
+    p = sym("pthread_create");
     if (p != nullptr) DobbyHook(p, reinterpret_cast<void*>(my_pthread_create),
                                 reinterpret_cast<void**>(&orig_pthread_create));
 
-    p = DobbySymbolResolver(nullptr, "open");
+    p = sym("open");
     if (p != nullptr) DobbyHook(p, reinterpret_cast<void*>(my_open),
                                 reinterpret_cast<void**>(&orig_open));
 
-    p = DobbySymbolResolver(nullptr, "openat");
+    p = sym("openat");
     if (p != nullptr) DobbyHook(p, reinterpret_cast<void*>(my_openat),
                                 reinterpret_cast<void**>(&orig_openat));
 
-    p = DobbySymbolResolver(nullptr, "fopen");
+    p = sym("fopen");
     if (p != nullptr) DobbyHook(p, reinterpret_cast<void*>(my_fopen),
                                 reinterpret_cast<void**>(&orig_fopen));
 
-    p = DobbySymbolResolver(nullptr, "stat");
+    p = sym("stat");
     if (p != nullptr) DobbyHook(p, reinterpret_cast<void*>(my_stat),
                                 reinterpret_cast<void**>(&orig_stat));
 
-    p = DobbySymbolResolver(nullptr, "lstat");
+    p = sym("lstat");
     if (p != nullptr) DobbyHook(p, reinterpret_cast<void*>(my_lstat),
                                 reinterpret_cast<void**>(&orig_lstat));
 
