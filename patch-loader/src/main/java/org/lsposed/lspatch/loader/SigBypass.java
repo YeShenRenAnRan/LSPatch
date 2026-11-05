@@ -482,6 +482,33 @@ public class SigBypass {
             XLog.w(TAG, "ctxwrapper hook failed: " + t);
         }
 
+        // 1.9) LoadedApk / ContextImpl 的 getApplicationInfo：sourceDir 也改回真实路径
+        for (String cls : new String[]{"android.app.LoadedApk", "android.app.ContextImpl"}) {
+            try {
+                for (var m : Class.forName(cls).getDeclaredMethods()) {
+                    if (!m.getName().equals("getApplicationInfo") || m.getParameterCount() != 0) continue;
+                    m.setAccessible(true);
+                    XposedBridge.hookMethod(m, new XC_MethodHook() {
+                        @Override
+                        protected void afterHookedMethod(MethodHookParam param) {
+                            Object r = param.getResult();
+                            if (!(r instanceof android.content.pm.ApplicationInfo)) return;
+                            android.content.pm.ApplicationInfo ai = (android.content.pm.ApplicationInfo) r;
+                            if (!context.getPackageName().equals(ai.packageName)) return;
+                            ai.sourceDir = realApk;
+                            ai.publicSourceDir = realApk;
+                            if (ai.appComponentFactory != null
+                                    && ai.appComponentFactory.contains("lspatch")) {
+                                ai.appComponentFactory = "android.app.AppComponentFactory";
+                            }
+                        }
+                    });
+                }
+            } catch (Throwable t) {
+                XLog.w(TAG, "getApplicationInfo hook failed: " + cls + ": " + t);
+            }
+        }
+
         // 2) opening our own apk -> cached original
         for (String cls : new String[]{"java.util.jar.JarFile", "java.util.zip.ZipFile"}) {
             try {
