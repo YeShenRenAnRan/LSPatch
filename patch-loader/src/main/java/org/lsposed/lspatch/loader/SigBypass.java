@@ -699,73 +699,80 @@ public class SigBypass {
     }
 
     // maps 缓存：地址段 -> 文件
-    private static long mapsTs;
-    private static final java.util.List<long[]> MAPS = new java.util.ArrayList<>();
-    private static final java.util.List<String> MAPS_PATH = new java.util.ArrayList<>();
+    private static volatile long[][] MAP_RANGES;   // {start,end,fileOffset}
+    private static volatile String[] MAP_PATHS;
+    private static volatile long mapsTs;
+    private static final Object MAPS_LOCK = new Object();
 
-    private static synchronized void refreshMaps() {
+    /** 解析 /proc/self/maps；节流 2 秒，且只在 MAPS_LOCK 内做，热路径不加锁。 */
+    private static void refreshMaps() {
         long now = System.currentTimeMillis();
-        if (now - mapsTs < 1500 && !MAPS.isEmpty()) return;
-        mapsTs = now;
-        MAPS.clear();
-        MAPS_PATH.clear();
-        try (var br = new java.io.BufferedReader(new java.io.FileReader("/proc/self/maps"))) {
-            String line;
-            while ((line = br.readLine()) != null) {
-                String[] f = line.split("\\s+");
-                if (f.length < 6) continue;
-                String[] se = f[0].split("-");
-                if (se.length != 2) continue;
-                if (!f[5].startsWith("/")) continue;
-                try {
-                    MAPS.add(new long[]{Long.parseLong(se[0], 16), Long.parseLong(se[1], 16),
-                            Long.parseLong(f[2], 16)});
-                    MAPS_PATH.add(f[5]);
-                } catch (Throwable ignored) {
+        if (MAP_RANGES != null && now - mapsTs < 2000) return;
+        synchronized (MAPS_LOCK) {
+            now = System.currentTimeMillis();
+            if (MAP_RANGES != null && now - mapsTs < 2000) return;
+            java.util.List<long[]> ranges = new java.util.ArrayList<>();
+            java.util.List<String> paths = new java.util.ArrayList<>();
+            try (var br = new java.io.BufferedReader(new java.io.FileReader("/proc/self/maps"))) {
+                String line;
+                while ((line = br.readLine()) != null) {
+                    String[] f = line.split("\\s+");
+                    if (f.length < 6) continue;
+                    String[] se = f[0].split("-");
+                    if (se.length != 2) continue;
+                    if (!f[5].startsWith("/")) continue;
+                    try {
+                        ranges.add(new long[]{Long.parseLong(se[0], 16),
+                                Long.parseLong(se[1], 16), Long.parseLong(f[2], 16)});
+                        paths.add(f[5]);
+                    } catch (Throwable ignored) {
+                    }
                 }
+            } catch (Throwable ignored) {
             }
-        } catch (Throwable ignored) {
+            MAP_PATHS = paths.toArray(new String[0]);
+            MAP_RANGES = ranges.toArray(new long[0][]);
+            mapsTs = now;
         }
     }
 
-    private static int DEX_CKSUM;
-    private static String CACHE_FOR_CKSUM;
-
-    private static synchronized int dexChecksum() {
-        if (DEX_CKSUM != 0) return DEX_CKSUM;
-        if (CACHE_FOR_CKSUM == null) return 0;
-        try (java.util.zip.ZipFile z = new java.util.zip.ZipFile(CACHE_FOR_CKSUM)) {
-            java.util.zip.ZipEntry e = z.getEntry("classes.dex");
-            if (e == null) return 0;
-            try (var in = z.getInputStream(e)) {
-                byte[] h = new byte[12];
-                if (in.read(h, 0, 12) < 12) return 0;
-                DEX_CKSUM = (h[8] & 0xff) | ((h[9] & 0xff) << 8) | ((h[10] & 0xff) << 16) | ((h[11] & 0xff) << 24);
-                XLog.d(TAG, "dex checksum = " + Integer.toHexString(DEX_CKSUM));
-            }
-        } catch (Throwable ignored) {
+    private static int findMap(long addr) {
+        long[][] r = MAP_RANGES;
+        if (r == null) return -1;
+        for (int i = 0; i < r.length; i++) {
+            if (addr >= r[i][0] && addr < r[i][1]) return i;
         }
-        return DEX_CKSUM;
+        return -1;
     }
 
     private static boolean spoofMem(long addr, byte[] dst, int off, int len, String realApk) {
         if (addr <= 0 || len <= 0) return false;
-        refreshMaps();
+        int hit = findMap(addr);
+        if (hit < 0) {
+            // 只有查不到时才重新读 maps（节流），避免每次 peek 都扫一遍
+            refreshMaps();
+            hit = findMap(addr);
+            if (hit < 0) return false;
+        }
+        long[][] ranges = MAP_RANGES;
+        String[] paths = MAP_PATHS;
+        if (ranges == null || paths == null || hit >= ranges.length) return false;
+
         long cur = addr;
         int dstOff = off;
         long remaining = len;
         while (remaining > 0) {
-            int hit = -1;
-            for (int i = 0; i < MAPS.size(); i++) {
-                long[] m = MAPS.get(i);
-                if (cur >= m[0] && cur < m[1]) {
-                    hit = i;
-                    break;
-                }
+            int i = findMap(cur);
+            if (i < 0) {
+                refreshMaps();
+                ranges = MAP_RANGES;
+                paths = MAP_PATHS;
+                if (ranges == null || paths == null) return false;
+                i = findMap(cur);
+                if (i < 0) return false;
             }
-            if (hit < 0) return false;
-            long[] m = MAPS.get(hit);
-            String path = MAPS_PATH.get(hit);
+            long[] m = ranges[i];
+            String path = paths[i];
             long chunk = Math.min(remaining, m[1] - cur);
             if (path.endsWith(".vdex") && cur == m[0]) {
                 int cks = dexChecksum();
@@ -802,47 +809,5 @@ public class SigBypass {
             remaining -= chunk;
         }
         return true;
-    }
-
-    static void doSigBypass(Context context, int sigBypassLevel) throws IOException {
-        if (sigBypassLevel >= Constants.SIGBYPASS_LV_PM) {
-            // 先记下"真实签名"（此刻 PM 还没被 hook），后面用来区分"真签名"和"哨兵/伪造签名"
-            try {
-                PackageInfo self = context.getPackageManager()
-                        .getPackageInfo(context.getPackageName(), PackageManager.GET_SIGNATURES);
-                if (self != null && self.signatures != null && self.signatures.length > 0) {
-                    REAL_SIG_HASH = self.signatures[0].hashCode();
-                    XLog.d(TAG, "real sig hash = " + Integer.toHexString(REAL_SIG_HASH));
-                }
-            } catch (Throwable t) {
-                XLog.w(TAG, "capture real sig failed: " + t);
-            }
-            // Prime the cache so hasSigningCertificate has the original on hand from the first call.
-            getReplacement(context, context.getPackageName());
-            hookPackageParser(context);
-            // proxyPackageInfoCreator(context);  // 由 PackageInfo$1.createFromParcel hook 取代
-            hookApplicationPackageManager(context);
-            hookPackageArchiveInfo(context);
-            hookSigningCertificateCheck(context);
-            hookUniversal(context);
-        }
-        if (sigBypassLevel >= Constants.SIGBYPASS_LV_PM_OPENAT) {
-            String cacheApkPath;
-            try (ZipFile sourceFile = new ZipFile(context.getPackageResourcePath())) {
-                var entry = sourceFile.getEntry(ORIGINAL_APK_ASSET_PATH);
-                if (entry != null) {
-                    cacheApkPath = context.getCacheDir() + "/lspatch/origin/" + entry.getCrc() + ".apk";
-                } else {
-                    cacheApkPath = null;
-                }
-            }
-            if (cacheApkPath != null) {
-                org.matrix.vector.nativebridge.SigBypass.enableOpenatHook(context.getPackageResourcePath(), cacheApkPath);
-            }
-        }
-        if (sigBypassLevel >= Constants.SIGBYPASS_LV_PM_OPENAT_SVC) {
-            // Reuses the apk paths enableOpenatHook just recorded; must run after it.
-            org.matrix.vector.nativebridge.SigBypass.enableSvcRedirect();
-        }
     }
 }
