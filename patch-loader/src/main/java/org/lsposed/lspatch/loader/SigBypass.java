@@ -344,7 +344,7 @@ public class SigBypass {
                                                 || cn.startsWith("android.app.ContextImpl")) {
                                             continue;
                                         }
-                                        if (n++ >= 6) break;
+                                        if (n++ >= 24) break;
                                         sb.append("\n    at ").append(cn).append('.').append(e.getMethodName());
                                     }
                                     XLog.d(TAG, "path hook caller stack:" + sb);
@@ -863,4 +863,46 @@ public class SigBypass {
         }
         return true;
     }
+
+    static void doSigBypass(Context context, int sigBypassLevel) throws IOException {
+        if (sigBypassLevel >= Constants.SIGBYPASS_LV_PM) {
+            // 先记下真实签名（此刻 PM 还没被 hook），用于区分真签名与哨兵
+            try {
+                PackageInfo self = context.getPackageManager()
+                        .getPackageInfo(context.getPackageName(), PackageManager.GET_SIGNATURES);
+                if (self != null && self.signatures != null && self.signatures.length > 0) {
+                    REAL_SIG_HASH = self.signatures[0].hashCode();
+                    XLog.d(TAG, "real sig hash = " + Integer.toHexString(REAL_SIG_HASH));
+                }
+            } catch (Throwable t) {
+                XLog.w(TAG, "capture real sig failed: " + t);
+            }
+            getReplacement(context, context.getPackageName());
+            hookPackageParser(context);
+            // proxyPackageInfoCreator(context);  // 由 PackageInfo$1.createFromParcel hook 取代
+            hookApplicationPackageManager(context);
+            hookPackageArchiveInfo(context);
+            hookSigningCertificateCheck(context);
+            hookUniversal(context);
+        }
+        if (sigBypassLevel >= Constants.SIGBYPASS_LV_PM_OPENAT) {
+            String cacheApkPath;
+            try (ZipFile sourceFile = new ZipFile(context.getPackageResourcePath())) {
+                var entry = sourceFile.getEntry(ORIGINAL_APK_ASSET_PATH);
+                if (entry != null) {
+                    cacheApkPath = context.getCacheDir() + "/lspatch/origin/" + entry.getCrc() + ".apk";
+                } else {
+                    cacheApkPath = null;
+                }
+            }
+            if (cacheApkPath != null) {
+                org.matrix.vector.nativebridge.SigBypass.enableOpenatHook(
+                        context.getPackageResourcePath(), cacheApkPath);
+            }
+        }
+        if (sigBypassLevel >= Constants.SIGBYPASS_LV_PM_OPENAT_SVC) {
+            org.matrix.vector.nativebridge.SigBypass.enableSvcRedirect();
+        }
+    }
+
 }
