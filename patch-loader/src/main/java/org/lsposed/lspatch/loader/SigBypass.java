@@ -699,6 +699,28 @@ public class SigBypass {
     }
 
     // maps 缓存：地址段 -> 文件
+    private static String CACHE_FOR_CKSUM;
+    private static int DEX_CKSUM;
+
+    /** 从缓存原包的 classes.dex 读 checksum（dex 头偏移 8，小端），用于伪造 vdex 头。 */
+    private static synchronized int dexChecksum() {
+        if (DEX_CKSUM != 0) return DEX_CKSUM;
+        if (CACHE_FOR_CKSUM == null) return 0;
+        try (var z = new java.util.zip.ZipFile(CACHE_FOR_CKSUM)) {
+            var e = z.getEntry("classes.dex");
+            if (e == null) return 0;
+            try (var in = z.getInputStream(e)) {
+                byte[] h = new byte[12];
+                if (in.read(h, 0, 12) < 12) return 0;
+                DEX_CKSUM = (h[8] & 0xff) | ((h[9] & 0xff) << 8)
+                        | ((h[10] & 0xff) << 16) | ((h[11] & 0xff) << 24);
+                XLog.d(TAG, "dex checksum = " + Integer.toHexString(DEX_CKSUM));
+            }
+        } catch (Throwable ignored) {
+        }
+        return DEX_CKSUM;
+    }
+
     private static volatile long[][] MAP_RANGES;   // {start,end,fileOffset}
     private static volatile String[] MAP_PATHS;
     private static volatile long mapsTs;
