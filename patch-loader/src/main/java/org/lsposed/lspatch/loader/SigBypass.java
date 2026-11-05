@@ -336,10 +336,18 @@ public class SigBypass {
                                     StringBuilder sb = new StringBuilder();
                                     int n = 0;
                                     for (StackTraceElement e : new Throwable().getStackTrace()) {
-                                        if (n++ >= 8) break;
-                                        sb.append("\n    at ").append(e.getClassName()).append('.').append(e.getMethodName());
+                                        String cn = e.getClassName();
+                                        if (cn.startsWith("org.lsposed.")
+                                                || cn.startsWith("org.matrix.")
+                                                || cn.startsWith("de.robv.")
+                                                || cn.startsWith("java.lang.reflect.")
+                                                || cn.startsWith("android.app.ContextImpl")) {
+                                            continue;
+                                        }
+                                        if (n++ >= 6) break;
+                                        sb.append("\n    at ").append(cn).append('.').append(e.getMethodName());
                                     }
-                                    XLog.d(TAG, "path hook stack:" + sb);
+                                    XLog.d(TAG, "path hook caller stack:" + sb);
                                 }
                                 param.setResult(realApk);
                             }
@@ -448,6 +456,29 @@ public class SigBypass {
             }
         } catch (Throwable t) {
             XLog.w(TAG, "loadedapk hook failed: " + t);
+        }
+
+        // 1.8) ContextWrapper 路径（Application 继承它）
+        try {
+            Class<?> cw = Class.forName("android.content.ContextWrapper");
+            for (String name : new String[]{"getPackageCodePath", "getPackageResourcePath"}) {
+                for (var m : cw.getDeclaredMethods()) {
+                    if (!m.getName().equals(name) || m.getParameterCount() != 0) continue;
+                    m.setAccessible(true);
+                    XposedBridge.hookMethod(m, new XC_MethodHook() {
+                        @Override
+                        protected void afterHookedMethod(MethodHookParam param) {
+                            Object orig = param.getResult();
+                            if (orig instanceof String && !realApk.equals(orig)) {
+                                XLog.d(TAG, "ctxwrapper path " + callerClass() + " orig=" + orig);
+                                param.setResult(realApk);
+                            }
+                        }
+                    });
+                }
+            }
+        } catch (Throwable t) {
+            XLog.w(TAG, "ctxwrapper hook failed: " + t);
         }
 
         // 2) opening our own apk -> cached original
