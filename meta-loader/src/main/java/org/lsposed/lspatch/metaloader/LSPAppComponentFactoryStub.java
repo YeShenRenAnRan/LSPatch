@@ -43,6 +43,9 @@ public class LSPAppComponentFactoryStub extends AppComponentFactory {
         }
     }
 
+    /** native 层补充：maps 清洗 / APK 路径重定向 / RASP 线程拦截（jni/src/mixsec.cpp） */
+    private static native void nativeInitMixSec();
+
     private static void bootstrap() {
         try {
             archToLib.put("arm", "armeabi-v7a");
@@ -135,6 +138,11 @@ public class LSPAppComponentFactoryStub extends AppComponentFactory {
             }
 
             System.load(soPath);
+            try {
+                nativeInitMixSec();
+            } catch (Throwable t) {
+                Log.w(TAG, "mixsec init failed", t);
+            }
         } catch (Throwable e) {
             throw new ExceptionInInitializerError(e);
         }

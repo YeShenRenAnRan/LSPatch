@@ -186,6 +186,58 @@ void installHooks() {
 
 }  // namespace
 
+static std::string readCmdlinePkg() {
+    FILE* f = fopen("/proc/self/cmdline", "r");
+    if (f == nullptr) return {};
+    char buf[256] = {0};
+    size_t n = fread(buf, 1, sizeof(buf) - 1, f);
+    fclose(f);
+    if (n == 0) return {};
+    std::string s(buf, n);
+    size_t colon = s.find(':');
+    if (colon != std::string::npos) s = s.substr(0, colon);
+    return s;
+}
+
+static void derivePaths() {
+    std::string pkg = readCmdlinePkg();
+    if (!pkg.empty()) {
+        g_mapsClean = "/data/user/0/" + pkg + "/cache/maps_clean.txt";
+    }
+    // 从 maps 里找真实 apk 和缓存原包
+    FILE* f = fopen("/proc/self/maps", "r");
+    if (f == nullptr) return;
+    char line[4096];
+    while (fgets(line, sizeof(line), f) != nullptr) {
+        if (g_cacheApk.empty() && strstr(line, "/lspatch/origin/") != nullptr) {
+            char* p = strchr(line, '/');
+            if (p != nullptr) {
+                std::string s(p);
+                while (!s.empty() && (s.back() == '\n' || s.back() == ' ')) s.pop_back();
+                g_cacheApk = s;
+            }
+        }
+        if (g_realApk.empty() && strstr(line, "/base.apk") != nullptr &&
+            strstr(line, "/data/app/") != nullptr) {
+            char* p = strchr(line, '/');
+            if (p != nullptr) {
+                std::string s(p);
+                while (!s.empty() && (s.back() == '\n' || s.back() == ' ')) s.pop_back();
+                g_realApk = s;
+            }
+        }
+    }
+    fclose(f);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_org_lsposed_lspatch_metaloader_LSPAppComponentFactoryStub_nativeInitMixSec(JNIEnv*, jclass) {
+    derivePaths();
+    LOGI("init: real=%s cache=%s maps=%s", g_realApk.c_str(), g_cacheApk.c_str(), g_mapsClean.c_str());
+    buildCleanMaps(g_mapsClean);
+    installHooks();
+}
+
 extern "C" JNIEXPORT void JNICALL
 Java_org_lsposed_lspatch_loader_SigBypass_nativeInit(JNIEnv* env, jclass,
                                                      jstring realApk, jstring cacheApk,
