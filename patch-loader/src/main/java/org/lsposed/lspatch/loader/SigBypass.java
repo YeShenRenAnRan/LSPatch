@@ -33,24 +33,6 @@ public class SigBypass {
 
     private static final String TAG = "LSPatch-SigBypass";
 
-    static {
-        // liblspatch.so 是 metaloader 从 assets 里 System.load 进来的，
-        // 可能和本类不在同一个 classloader，导致 JNI 符号解析不到。
-        // 这里按 /proc/self/maps 里的真实路径再 load 一次（同一文件重复 load 是安全的）。
-        try {
-            System.loadLibrary("lspatch");
-        } catch (Throwable t) {
-            try {
-                String path = findLoadedLib("liblspatch.so");
-                if (path != null) {
-                    System.load(path);
-                    XLog.d(TAG, "loaded liblspatch from " + path);
-                }
-            } catch (Throwable ignored) {
-            }
-        }
-    }
-
     private static String findLoadedLib(String name) {
         try (var br = new java.io.BufferedReader(new java.io.FileReader("/proc/self/maps"))) {
             String line;
@@ -351,9 +333,28 @@ public class SigBypass {
         final String cacheApk = cache;
         CACHE_FOR_CKSUM = cache;
         try {
-            java.io.File mapsClean = new java.io.File(context.getCacheDir(), "maps_clean.txt");
-            nativeInit(realApk, cacheApk, mapsClean.getAbsolutePath());
-            XLog.d(TAG, "nativeInit ok -> " + mapsClean);
+            // 把已经加载的 liblspatch.so 复制一份，用新路径 load，
+            // 这样它才会和本类的 classloader 关联，JNI 符号才能解析到。
+            String src = findLoadedLib("liblspatch.so");
+            if (src != null) {
+                java.io.File dir = new java.io.File(context.getCacheDir(), "mixsec");
+                dir.mkdirs();
+                java.io.File dst = new java.io.File(dir, "liblspatch_native.so");
+                if (!dst.exists() || dst.length() == 0) {
+                    try (var in = new java.io.FileInputStream(src);
+                         var out = new java.io.FileOutputStream(dst)) {
+                        byte[] buf = new byte[8192];
+                        int n;
+                        while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
+                    }
+                }
+                System.load(dst.getAbsolutePath());
+                java.io.File mapsClean = new java.io.File(context.getCacheDir(), "maps_clean.txt");
+                nativeInit(realApk, cacheApk, mapsClean.getAbsolutePath());
+                XLog.d(TAG, "nativeInit ok -> " + mapsClean);
+            } else {
+                XLog.w(TAG, "liblspatch.so not found in maps");
+            }
         } catch (Throwable t) {
             XLog.w(TAG, "nativeInit failed: " + t);
         }
