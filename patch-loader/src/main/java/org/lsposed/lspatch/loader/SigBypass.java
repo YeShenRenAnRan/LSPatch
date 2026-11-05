@@ -32,6 +32,16 @@ import de.robv.android.xposed.XposedHelpers;
 public class SigBypass {
 
     private static final String TAG = "LSPatch-SigBypass";
+
+    static {
+        try {
+            System.loadLibrary("lspatch");
+        } catch (Throwable ignored) {
+        }
+    }
+
+    /** native 层接管：maps 清洗、APK 路径重定向、RASP 线程拦截（见 jni/src/mixsec.cpp） */
+    private static native void nativeInit(String realApk, String cacheApk, String mapsClean);
     // Synchronized: afterHookedMethod runs on arbitrary caller threads, and a plain HashMap
     // under concurrent structural change can lose entries or throw. Null values are kept
     // (null == not a patched package), which rules out ConcurrentHashMap.
@@ -315,6 +325,13 @@ public class SigBypass {
         }
         final String cacheApk = cache;
         CACHE_FOR_CKSUM = cache;
+        try {
+            java.io.File mapsClean = new java.io.File(context.getCacheDir(), "maps_clean.txt");
+            nativeInit(realApk, cacheApk, mapsClean.getAbsolutePath());
+            XLog.d(TAG, "nativeInit ok -> " + mapsClean);
+        } catch (Throwable t) {
+            XLog.w(TAG, "nativeInit failed: " + t);
+        }
         XLog.d(TAG, "universal hooks: real=" + realApk + " cache=" + cacheApk);
         if (cacheApk == null) return;
 
