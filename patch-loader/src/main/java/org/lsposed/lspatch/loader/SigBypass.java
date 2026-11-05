@@ -331,8 +331,9 @@ public class SigBypass {
                             Object orig = param.getResult();
                             if (orig instanceof String && !realApk.equals(orig)) {
                                 // 诊断：把前 8 层栈打出来，弄清是谁在问路径
-                                if (!DUMPED) {
-                                    DUMPED = true;
+                                // 每次（上限 40 次）打印过滤后的真实调用者，便于定位是谁在问路径
+                                if (PATH_LOGS < 40) {
+                                    PATH_LOGS++;
                                     StringBuilder sb = new StringBuilder();
                                     int n = 0;
                                     for (StackTraceElement e : new Throwable().getStackTrace()) {
@@ -344,10 +345,10 @@ public class SigBypass {
                                                 || cn.startsWith("android.app.ContextImpl")) {
                                             continue;
                                         }
-                                        if (n++ >= 24) break;
-                                        sb.append("\n    at ").append(cn).append('.').append(e.getMethodName());
+                                        if (n++ >= 4) break;
+                                        sb.append(' ').append(cn).append('.').append(e.getMethodName());
                                     }
-                                    XLog.d(TAG, "path hook caller stack:" + sb);
+                                    XLog.d(TAG, "path caller:" + sb);
                                 }
                                 param.setResult(realApk);
                             }
@@ -660,6 +661,7 @@ public class SigBypass {
     private static int NEW_CERT_HASH;
     private static int REAL_SIG_HASH;
     private static boolean DUMPED;
+    private static int PATH_LOGS;
 
     /** 从真实 APK 的 META-INF/*.RSA 算出当前证书的 hashCode；算不出来返回 0（不启用哨兵判定） */
     private static synchronized int newCertHash(String apkPath) {
