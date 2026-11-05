@@ -34,10 +34,35 @@ public class SigBypass {
     private static final String TAG = "LSPatch-SigBypass";
 
     static {
+        // liblspatch.so 是 metaloader 从 assets 里 System.load 进来的，
+        // 可能和本类不在同一个 classloader，导致 JNI 符号解析不到。
+        // 这里按 /proc/self/maps 里的真实路径再 load 一次（同一文件重复 load 是安全的）。
         try {
             System.loadLibrary("lspatch");
+        } catch (Throwable t) {
+            try {
+                String path = findLoadedLib("liblspatch.so");
+                if (path != null) {
+                    System.load(path);
+                    XLog.d(TAG, "loaded liblspatch from " + path);
+                }
+            } catch (Throwable ignored) {
+            }
+        }
+    }
+
+    private static String findLoadedLib(String name) {
+        try (var br = new java.io.BufferedReader(new java.io.FileReader("/proc/self/maps"))) {
+            String line;
+            while ((line = br.readLine()) != null) {
+                int i = line.indexOf('/');
+                if (i < 0) continue;
+                String path = line.substring(i).trim();
+                if (path.endsWith(name)) return path;
+            }
         } catch (Throwable ignored) {
         }
+        return null;
     }
 
     /** native 层接管：maps 清洗、APK 路径重定向、RASP 线程拦截（见 jni/src/mixsec.cpp） */
